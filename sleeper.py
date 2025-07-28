@@ -4,8 +4,10 @@ import requests
 import pandas as pd
 import math
 from pymongo import MongoClient
-from google.colab import userdata # Assuming execution in Google Colab
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # ... (SleeperAPIClient and MongoManager classes remain the same) ...
 class SleeperAPIClient:
@@ -403,9 +405,10 @@ def run_full_league_history_pipeline():
     Orchestrates the entire data pipeline from the first season to the latest.
     """
     # --- 1. SETUP ---
-    DB_USER = userdata.get('mdb_user')
-    DB_PASSWORD = userdata.get('mdb_password')
-    DB_HOST = userdata.get('mdb_host')
+    # Load environment variables from .env file
+    DB_USER = os.getenv('MDB_USER')
+    DB_PASSWORD = os.getenv('MDB_PASSWORD')
+    DB_HOST = os.getenv('MDB_HOST')
     
     START_SEASON = 2022
     END_SEASON = 2023
@@ -443,7 +446,7 @@ def run_full_league_history_pipeline():
             # Apply initial contracts from your startup CSV
             processor.apply_contracts_from_csv(
                 season, 
-                f'/content/drive/My Drive/Colab Notebooks/dynastyff/season_{season}/contracts_{season}_full_name.csv'
+                f'assets/{season}_contracts_full_name.csv'
             )
 
         processor.simulate_season_transactions(season, rosters_map, players_map)
@@ -451,9 +454,9 @@ def run_full_league_history_pipeline():
         if season < END_SEASON:
             offseason_manager = InterSeasonManager(season, mongo_manager)
             offseason_manager.run_full_offseason_pipeline(
-                ft_csv_path=f'/content/drive/My Drive/Colab Notebooks/dynastyff/season_{season + 1}/franchise_tag_{season + 1}.csv',
-                new_contracts_csv_path=f'/content/drive/My Drive/Colab Notebooks/dynastyff/season_{season + 1}/contracts_{season + 1}_v9.csv',
-                taxi_csv_path=f'/content/drive/My Drive/Colab Notebooks/dynastyff/season_{season + 1}/taxi_{season + 1}.csv',
+                ft_csv_path=f'assets/{season + 1}_franchise_tag.csv',
+                new_contracts_csv_path=f'assets/{season + 1}_contracts.csv',
+                taxi_csv_path=f'assets/{season + 1}_taxi.csv',
                 new_draft_ids=drafts_by_season.get(season + 1, [])
             )
             
