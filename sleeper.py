@@ -70,7 +70,7 @@ class MongoManager:
     """
     Manages all interactions with the MongoDB database.
     """
-    def __init__(self, db_user, db_password, db_host, db_name='nfldata'):
+    def __init__(self, db_user, db_password, db_host, db_name='nfldata_v2'):
         """Initializes the database connection."""
         uri = f"mongodb+srv://{db_user}:{db_password}@{db_host}/?retryWrites=true&w=majority"
         self.client = MongoClient(uri)
@@ -159,20 +159,34 @@ class DataProcessor:
         users_map = {}
         rosters_map = {}
         for league_id in league_ids:
-            users_data = self.api.get_league_users(league_id)
-            for user in users_data:
-                users_map[user["user_id"]] = user["display_name"]
-            
-            roster_data = self.api.get_league_rosters(league_id)
-            rosters_map[league_id] = []
-            for roster in roster_data:
-                owner_id = roster.get("owner_id")
-                if owner_id:
-                     rosters_map[league_id].append({
-                        "owner_id": owner_id,
-                        roster["roster_id"]: users_map.get(owner_id, "N/A"),
-                        "sleeper_name": users_map.get(owner_id, "N/A")
-                    })
+            try:
+                users_data = self.api.get_league_users(league_id)
+                if not isinstance(users_data, list):
+                    print(f"Warning: Unexpected user data format for league {league_id}. Skipping users.")
+                    users_data = []
+                for user in users_data:
+                    users_map[user["user_id"]] = user["display_name"]
+                
+                roster_data = self.api.get_league_rosters(league_id)
+                if not isinstance(roster_data, list):
+                    print(f"Warning: Unexpected roster data format for league {league_id}. Skipping rosters.")
+                    roster_data = []
+                
+                rosters_map[league_id] = []
+                for roster in roster_data:
+                    owner_id = roster.get("owner_id")
+                    if owner_id:
+                         rosters_map[league_id].append({
+                            "owner_id": owner_id,
+                            roster["roster_id"]: users_map.get(owner_id, "N/A"),
+                            "sleeper_name": users_map.get(owner_id, "N/A")
+                        })
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching data for league {league_id}: {e}. Skipping this league.")
+                rosters_map[league_id] = [] # Ensure map is initialized even if data fetch fails
+            except Exception as e:
+                print(f"An unexpected error occurred for league {league_id}: {e}. Skipping this league.")
+                rosters_map[league_id] = []
         return users_map, rosters_map
     
     def process_and_store_drafts(self, draft_ids, users_map, players_map):
@@ -396,7 +410,8 @@ TRANSACTION_CLEANING_QUERIES = {
         {"transaction_id": {"$gt": 1005152235380125696, "$lt": 1006599450380292096}},
         # Roster adjustment (Antonius/Fields)
         {"transaction_id": {"$in": [1026754846822588416, 1026806999914332160]}}
-    ]
+    ],
+    2024: []
 }
 
 
@@ -411,13 +426,14 @@ def run_full_league_history_pipeline():
     DB_HOST = os.getenv('MDB_HOST')
     
     START_SEASON = 2022
-    END_SEASON = 2023
+    END_SEASON = 2025
     
     # Map league IDs to their corresponding season for accurate transaction fetching
     LEAGUE_IDS_SEASONS = {
         '867459577837416448': 2022,
         '966851427416977408': 2023,
-        '1124855836695351296': 2024 # Future season
+        '1124855836695351296': 2024,
+        '1124855836695351297': 2025
     }
     
     api_client = SleeperAPIClient()
@@ -428,9 +444,11 @@ def run_full_league_history_pipeline():
     players_map = processor.update_master_player_list()
     users_map, rosters_map = processor.build_user_and_roster_maps(list(LEAGUE_IDS_SEASONS.keys()))
     
+    # ['rookie', 'league']
     drafts_by_season = {
-        2022: ['869408534662696960', '869802031370686464'],
-        2023: ['966851427416977409']
+        2022: ['869802031370686464', '869408534662696960'],
+        2023: ['966851427416977409', '1005342622375886848'],
+        2024: ['1124855836695351297', '1136367086491676672']
     }
     
     # --- 3. SYNC AND CLEAN TRANSACTIONS (Done once for all seasons) ---
