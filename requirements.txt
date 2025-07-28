@@ -1,0 +1,5 @@
+pandas
+requests
+pymongo
+dnspython
+python-dotenv
