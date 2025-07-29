@@ -1,0 +1,109 @@
+[
+    {
+        "avatar": "55d84a9842931cd39b70ed61cda09c06",
+        "display_name": "sammyboiie",
+        "is_bot": false,
+        "is_owner": false,
+        "league_id": "966851427416977408",
+        "metadata": {
+            "allow_pn": "on",
+            "allow_sms": "on",
+            "league_report_pn": "on",
+            "mascot_message": "on",
+            "mention_pn": "on",
+            "player_like_pn": "on",
+            "player_nickname_update": "on",
+            "team_name": "Kelce Needs TAYTAY",
+            "team_name_update": "on",
+            "trade_block_pn": "on",
+            "transaction_commissioner": "on",
+            "transaction_free_agent": "on",
+            "transaction_trade": "on",
+            "transaction_waiver": "on",
+            "user_message_pn": "on"
+        },
+        "settings": null,
+        "user_id": "336938004557873152"
+    },
+    {
+        "avatar": "b67c8c2038fba40426dfe71bd27a6e45",
+        "display_name": "nbaguy8",
+        "is_bot": false,
+        "is_owner": false,
+        "league_id": "966851427416977408",
+        "metadata": {
+            "allow_pn": "on",
+            "mention_pn": "on",
+            "team_name": "Bijante Murray"
+        },
+        "settings": null,
+        "user_id": "358434876443308032"
+    },
+    {
+        "avatar": "a7edf17a1956ebe79017732156625301",
+        "display_name": "hashbrown247",
+        "is_bot": false,
+        "is_owner": false,
+        "league_id": "966851427416977408",
+        "metadata": {
+            "allow_pn": "on",
+            "allow_sms": "on",
+            "mascot_item_type_id_leg_1": "trash",
+            "mascot_item_type_id_leg_10": "trash",
+            "mascot_item_type_id_leg_11": "trash",
+            "mascot_item_type_id_leg_12": "trash",
+            "mascot_item_type_id_leg_13": "trash",
+            "mascot_item_type_id_leg_14": "trash",
+            "mascot_item_type_id_leg_15": "trash",
+            "mascot_item_type_id_leg_16": "trash",
+            "mascot_item_type_id_leg_17": "trash",
+            "mascot_item_type_id_leg_18": "trash",
+            "mascot_item_type_id_leg_2": "trash",
+            "mascot_item_type_id_leg_3": "trash",
+            "mascot_item_type_id_leg_4": "trash",
+            "mascot_item_type_id_leg_5": "trash",
+            "mascot_item_type_id_leg_6": "trash",
+            "mascot_item_type_id_leg_7": "trash",
+            "mascot_item_type_id_leg_8": "trash",
+            "mascot_item_type_id_leg_9": "trash",
+            "mascot_message_emotion_leg_1": "idle",
+            "mascot_message_emotion_leg_4": "taunting",
+            "mention_pn": "on",
+            "show_mascots": "on",
+            "team_name": "I miss redraft"
+        },
+        "settings": null,
+        "user_id": "454131066492416000"
+    },
+    {
+        "avatar": "8cc103b89d7c39d9e51c287940b52b6f",
+        "display_name": "PersianEmpire99",
+        "is_bot": false,
+        "is_owner": false,
+        "league_id": "966851427416977408",
+        "metadata": {
+            "allow_pn": "on",
+            "avatar": "https://sleepercdn.com/uploads/aa62cc11df28de4213c2496ff6131be2.jpg",
+            "mention_pn": "on",
+            "team_name": "PersianEmpire"
+        },
+        "settings": null,
+        "user_id": "858497785002074112"
+    },
+    {
+        "avatar": "e7af4deab0289b4f5505646424895246",
+        "display_name": "toshil",
+        "is_bot": false,
+        "is_owner": false,
+        "league_id": "966851427416977408",
+        "metadata": {
+            "allow_pn": "on",
+            "allow_sms": "on",
+            "archived": "on",
+            "mention_pn": "on",
+            "team_name": "Building Rome"
+        },
+        "settings": null,
+        "user_id": "861096188278095872"
+    }
+]

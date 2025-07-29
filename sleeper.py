@@ -1,5 +1,3 @@
-# sleeper_data_pipeline_full_history.py
-
 import requests
 import pandas as pd
 import math
@@ -529,45 +527,117 @@ class InterSeasonManager:
         source_collection = self.db.get_collection(self.completed_rosters_name)
         ft_collection = self.db.get_collection(self.franchise_tag_name)
         
-        # Your logic to age contracts and determine FT eligibility
-        # For demonstration, we copy and mark players with 1 year left as eligible
-        all_players = list(source_collection.find({"contract": {"$exists": True}}))
-        
-        for player in all_players:
-            # Age contract logic goes here
-            pass
+        # Logic to age contracts and determine FT eligibility, based on notebook
+        source_players = list(source_collection.find({"contract": {"$exists": True}}))
+        aged_players = []
 
-        self.db.clear_and_insert(self.franchise_tag_name, all_players)
+        for player in source_players:
+            contract = player.get("contract", {})
+            
+            # General contract aging for all players
+            contract["contract_years_left"] -= 1
+            contract["free_agent_before_season"] -= 1
+
+            # Taxi squad logic: contract tolls for a year, effectively reversing the aging
+            if contract.get("taxi_designation"):
+                if "y2_cost" in contract: contract["y3_cost"] = contract["y2_cost"]
+                if "y1_cost" in contract: contract["y2_cost"] = contract["y1_cost"]
+                if "y0_cost" in contract: contract["y1_cost"] = contract["y0_cost"]
+                # Reverse the aging for years left and FA season
+                contract["contract_years_left"] += 1
+                contract["free_agent_before_season"] += 1
+                # Taxi designation is for one season, so we remove it
+                contract["taxi_designation"] = False
+            
+            player["contract"] = contract
+            aged_players.append(player)
+
+        self.db.clear_and_insert(self.franchise_tag_name, aged_players)
+        
+        # Set franchise tag eligibility
         ft_collection.update_many(
-            {"contract.contract_years_left": 1},
+            {"contract.contract_years_left": 0},
             {"$set": {"contract.franchise_tag_allowed": True}}
         )
+        print(f"Aged contracts and set up {len(aged_players)} players in '{self.franchise_tag_name}'.")
 
     def _apply_franchise_tags_from_csv(self, file_path):
         """Applies selected franchise tags from a CSV file."""
         print(f"Applying franchise tags from {file_path}...")
         ft_collection = self.db.get_collection(self.franchise_tag_name)
-        ft_df = pd.read_csv(file_path)
-        tagged_players_df = ft_df[ft_df['franchise_tag'].notnull()]
+        try:
+            ft_df = pd.read_csv(file_path)
+            tagged_players_df = ft_df[ft_df['franchise_tag'].notnull()]
+        except (FileNotFoundError, KeyError) as e:
+            print(f"Error reading or processing franchise tag CSV: {e}. Skipping.")
+            return
 
+        updates_made = 0
         for _, row in tagged_players_df.iterrows():
-            # Your logic to update the player's contract with FT details
-            pass
+            player_name = row['full_name_ai']
+            team_name = row['team']
+            
+            player_doc = ft_collection.find_one({"player_name": player_name, "team_name": team_name})
+            
+            if player_doc and player_doc.get("contract", {}).get("franchise_tag_allowed"):
+                original_cost = player_doc.get("contract", {}).get("y0_cost", 0)
+                franchise_cost = int(math.ceil(original_cost * 1.2))
+                
+                result = ft_collection.update_one(
+                    {"_id": player_doc["_id"]},
+                    {"$set": {
+                        "contract.y1_cost": franchise_cost,
+                        "contract.franchise_tag_used": True,
+                        "contract.franchise_tag_allowed": False,
+                        "contract.contract_years_left": 1, # A franchise tag is a 1-year deal
+                        "contract.free_agent_before_season": self.upcoming_season + 1
+                    }}
+                )
+                if result.modified_count > 0:
+                    updates_made += 1
+                    print(f"  - Applied franchise tag to {player_name} for {team_name} at cost ${franchise_cost}.")
+            else:
+                print(f"  - Warning: Could not apply tag to {player_name} for {team_name}. Player not found or not eligible.")
+        
+        print(f"Applied {updates_made} franchise tags.")
 
     def _initialize_new_season_roster(self):
-        """Creates the new season's roster collection from the FT collection."""
+        """
+        Creates the new season's roster by carrying over players with remaining
+        contracts from the franchise tag collection and aging their contracts.
+        """
         print(f"Initializing new season roster: '{self.upcoming_rosters_name}'")
         ft_collection = self.db.get_collection(self.franchise_tag_name)
         
-        # Find players still under contract or who were tagged
-        players_under_contract = list(ft_collection.find(
-            {"$or": [
-                {"contract.contract_years_left": {"$gt": 1}},
-                {"contract.franchise_tag_used": True}
-            ]}
-        ))
+        # Find players who will be on the roster for the new season.
+        # This includes anyone with years left on their contract after the initial aging.
+        players_to_carry_over_cursor = ft_collection.find({
+            "contract.contract_years_left": {"$gt": 0}
+        })
         
-        self.db.clear_and_insert(self.upcoming_rosters_name, players_under_contract)
+        new_roster_players = []
+        for player in players_to_carry_over_cursor:
+            contract = player.get("contract", {})
+            
+            # Age the contract values for the new season
+            # y1 becomes y0, y2 becomes y1, etc.
+            contract["y0_cost"] = contract.get("y1_cost")
+            contract["y1_cost"] = contract.get("y2_cost")
+            contract["y2_cost"] = contract.get("y3_cost")
+
+            # Remove keys that are now null
+            if contract["y1_cost"] is None: del contract["y1_cost"]
+            if contract["y2_cost"] is None: del contract["y2_cost"]
+            if "y3_cost" in contract: del contract["y3_cost"]
+
+            player["contract"] = contract
+            player["season"] = self.upcoming_season
+            player["needs_contract_status"] = False
+            
+            new_roster_players.append(player)
+            
+        self.db.clear_and_insert(self.upcoming_rosters_name, new_roster_players)
+        print(f"Initialized '{self.upcoming_rosters_name}' with {len(new_roster_players)} players carried over.")
 
 # --- NEW: Configuration for Transaction Exemptions ---
 # This dictionary holds the queries to find and remove specific transactions.
