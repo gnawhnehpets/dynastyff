@@ -5,11 +5,35 @@ import pandas as pd
 import math
 from pymongo import MongoClient
 import os
+import json # Added for saving JSON data
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# ... (SleeperAPIClient and MongoManager classes remain the same) ...
+# Helper function to save top N results
+def save_top_n_results(data, subdir, filename, n=5):
+    if isinstance(data, dict):
+        # If it's a dict (like players), convert values to a list for slicing
+        data_to_save = list(data.values())
+    elif isinstance(data, list):
+        data_to_save = data
+    else:
+        # If data is not a list or dict, just save it as is (e.g., metadata)
+        data_to_save = data
+
+    # Ensure data_to_save is iterable before slicing
+    if isinstance(data_to_save, (list, dict)):
+        top_n = data_to_save[:n] if isinstance(data_to_save, list) else {k: data_to_save[k] for i, k in enumerate(data_to_save) if i < n}
+    else:
+        top_n = data_to_save # For non-list/dict data, save as is
+
+    filepath = f"{subdir}/{filename}"
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, 'w') as f:
+        json.dump(top_n, f, indent=4)
+    print(f"Saved top {n} results to {filepath}")
+
+
 class SleeperAPIClient:
     """
     Client to handle all interactions with the Sleeper API.
@@ -21,49 +45,64 @@ class SleeperAPIClient:
         url = f"{self.BASE_URL}/players/nfl"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", "top_players.json")
+        return data
 
-    def get_league_info(self, league_id):
+    def get_league_info(self, league_id, season):
         """Fetches basic information for a given league."""
         url = f"{self.BASE_URL}/league/{league_id}"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", f"top_league_info_{season}.json")
+        return data
 
-    def get_league_users(self, league_id):
+    def get_league_users(self, league_id, season):
         """Fetches all users in a specific league."""
         url = f"{self.BASE_URL}/league/{league_id}/users"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", f"top_league_users_{season}.json")
+        return data
 
-    def get_league_rosters(self, league_id):
+    def get_league_rosters(self, league_id, season):
         """Fetches all rosters in a specific league."""
         url = f"{self.BASE_URL}/league/{league_id}/rosters"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", f"top_league_rosters_{season}.json")
+        return data
 
-    def get_draft_metadata(self, draft_id):
+    def get_draft_metadata(self, draft_id, season):
         """Fetches metadata for a specific draft."""
         url = f"{self.BASE_URL}/draft/{draft_id}"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", f"top_draft_metadata_{season}.json")
+        return data
 
-    def get_draft_picks(self, draft_id):
+    def get_draft_picks(self, draft_id, season):
         """Fetches all picks from a specific draft."""
         url = f"{self.BASE_URL}/draft/{draft_id}/picks"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        save_top_n_results(data, "output", f"top_draft_picks_{season}.json")
+        return data
 
-    def get_weekly_transactions(self, league_id, week):
+    def get_weekly_transactions(self, league_id, week, season):
         """Fetches all transactions for a given league and week."""
         url = f"{self.BASE_URL}/league/{league_id}/transactions/{week}"
         response = requests.get(url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if week == 17:
+            save_top_n_results(data, "output", f"top_weekly_transactions_{season}_week_{week}.json")
+        return data
 
 
 class MongoManager:
@@ -98,6 +137,16 @@ class MongoManager:
         self.client.close()
         print("MongoDB connection closed.")
 
+    def reset_collections(self, collection_names):
+        """
+        Resets (clears) a list of specified MongoDB collections.
+        """
+        print(f"Resetting collections: {', '.join(collection_names)}...")
+        for name in collection_names:
+            collection = self.get_collection(name)
+            collection.delete_many({})
+            print(f"  - Cleared collection '{name}'.")
+
 class DataProcessor:
     """
     Handles the processing and transformation of fantasy football data.
@@ -106,6 +155,89 @@ class DataProcessor:
         self.api = api_client
         self.db = mongo_manager
 
+    def process_and_store_drafts(self, drafts_by_season, users_map, players_map):
+        """
+        Processes draft data, assigns initial rookie and startup auction contracts, 
+        and stores it in MongoDB.
+        """
+        print("Processing draft data with contract logic...")
+        all_draft_picks = []
+        initial_rosters = {}  # Keyed by season
+
+        # Determine the earliest season to correctly identify the startup roster
+        min_season = min(drafts_by_season.keys()) if drafts_by_season else None
+
+        for season, draft_ids in drafts_by_season.items():
+            for draft_id in draft_ids:
+                metadata = self.api.get_draft_metadata(draft_id, season)
+                picks = self.api.get_draft_picks(draft_id, season)
+                
+                league_id = metadata["league_id"]
+                draft_type = "league" if len(picks) > 100 else "rookie"
+                
+                print(f"  - Processing {season} {draft_type} draft for league {league_id}...")
+                
+                if season not in initial_rosters:
+                    initial_rosters[season] = []
+
+                for pick in picks:
+                    player_id = pick["player_id"]
+                    owner_id = pick["picked_by"]
+                    pick_no = pick["pick_no"]
+
+                    pick.update({
+                        "league_id": league_id,
+                        "season": season,
+                        "draft_type": draft_type,
+                        "team_name": users_map.get(owner_id),
+                        "player_name": players_map.get(player_id, {}).get("full_name"),
+                        "contract": {}
+                    })
+                    
+                    # --- IMPLEMENTED CONTRACT LOGIC ---
+                    if draft_type == "rookie":
+                        cost = 0
+                        years_left = 3
+                        if pick_no <= 5: cost = 15
+                        elif pick_no <= 10: cost = 10
+                        elif pick_no <= 20: cost = 5
+                        elif pick_no <= 30: cost = 3
+                        else: cost = 1
+                        
+                        pick["needs_contract_status"] = False
+                        pick["contract"].update({
+                            "drafted_in": season,
+                            "y0_cost": cost,
+                            "y1_cost": int(math.ceil(cost * 1.4)),
+                            "y2_cost": int(math.ceil(int(math.ceil(cost * 1.4)) * 1.4)),
+                            "contract_years_left": 3,
+                            "free_agent_before_season": season + years_left
+                        })
+                    else:  # 'league' or startup draft
+                        if pick['metadata'].get('years_exp') != "0": # Exclude rookies from startup draft data
+                            pick["needs_contract_status"] = True
+                            cost = int(pick["metadata"]["amount"])
+                            pick["contract"].update({
+                                "y0_cost": cost,
+                                "contract_years_left": 1,
+                                "free_agent_before_season": season + 1
+                            })
+                    
+                    all_draft_picks.append(pick)
+                    
+                    # Build the initial roster only for the league's first season
+                    if season == min_season:
+                        # Exclude rookies from the startup roster as they are added via their own draft
+                        if draft_type == "league" and pick['metadata'].get('years_exp') != "0":
+                            initial_rosters[season].append(pick)
+                        elif draft_type == "rookie":
+                            initial_rosters[season].append(pick)
+
+        self.db.clear_and_insert('drafts', all_draft_picks)
+        if min_season and min_season in initial_rosters:
+            self.db.clear_and_insert(f'roster_{min_season}', initial_rosters[min_season])
+    
+    # ... (all other DataProcessor methods remain the same as the previous response) ...
     def update_master_player_list(self):
         print("Updating master player list...")
         players_data = self.api.get_all_nfl_players()
@@ -122,7 +254,7 @@ class DataProcessor:
         for league_id, season in league_ids_with_seasons.items():
             for week in range(1, 19):
                 try:
-                    transactions = self.api.get_weekly_transactions(league_id, week)
+                    transactions = self.api.get_weekly_transactions(league_id, week, season)
                     for tx in transactions:
                         if tx.get("status") == "complete":
                             tx["season"] = int(season)
@@ -149,8 +281,7 @@ class DataProcessor:
                     print(f"  - Season {season}: Removed {result.deleted_count} documents matching query.")
                     total_deleted += result.deleted_count
         print(f"Total exempted transactions removed: {total_deleted}.")
-    
-    # ... (other DataProcessor methods) ...
+
     def build_user_and_roster_maps(self, league_ids):
         """
         Builds mappings of user IDs to display names and league IDs to rosters.
@@ -158,16 +289,16 @@ class DataProcessor:
         print("Building user and roster maps...")
         users_map = {}
         rosters_map = {}
-        for league_id in league_ids:
+        for league_id, season in league_ids.items(): # Modified to get season from LEAGUE_IDS_SEASONS
             try:
-                users_data = self.api.get_league_users(league_id)
+                users_data = self.api.get_league_users(league_id, season)
                 if not isinstance(users_data, list):
                     print(f"Warning: Unexpected user data format for league {league_id}. Skipping users.")
                     users_data = []
                 for user in users_data:
                     users_map[user["user_id"]] = user["display_name"]
                 
-                roster_data = self.api.get_league_rosters(league_id)
+                roster_data = self.api.get_league_rosters(league_id, season)
                 if not isinstance(roster_data, list):
                     print(f"Warning: Unexpected roster data format for league {league_id}. Skipping rosters.")
                     roster_data = []
@@ -188,98 +319,121 @@ class DataProcessor:
                 print(f"An unexpected error occurred for league {league_id}: {e}. Skipping this league.")
                 rosters_map[league_id] = []
         return users_map, rosters_map
-    
-    def process_and_store_drafts(self, draft_ids, users_map, players_map):
-        """
-        Processes draft data, assigns initial contracts, and stores it in MongoDB.
-        """
-        print("Processing draft data...")
-        all_draft_picks = []
-        initial_rosters = {} # Keyed by season
-
-        for draft_id in draft_ids:
-            metadata = self.api.get_draft_metadata(draft_id)
-            picks = self.api.get_draft_picks(draft_id)
-            
-            season = int(metadata["season"])
-            league_id = metadata["league_id"]
-            draft_type = "league" if len(picks) > 100 else "rookie"
-            
-            print(f"Processing {season} {draft_type} draft for league {league_id}...")
-            
-            if season not in initial_rosters:
-                initial_rosters[season] = []
-
-            for pick in picks:
-                player_id = pick["player_id"]
-                owner_id = pick["picked_by"]
-
-                pick.update({
-                    "league_id": league_id,
-                    "season": season,
-                    "draft_type": draft_type,
-                    "team_name": users_map.get(owner_id),
-                    "player_name": players_map.get(player_id, {}).get("full_name"),
-                    "contract": {}
-                })
-                
-                # Assign initial contract based on draft type
-                if draft_type == "rookie":
-                    # Your rookie contract logic here...
-                    pass
-                else: # Startup draft
-                    # Your startup contract logic here...
-                    pass
-
-                all_draft_picks.append(pick)
-                if season == 2022: # Logic to build the initial 2022 roster
-                    initial_rosters[season].append(pick)
-
-        self.db.clear_and_insert('drafts', all_draft_picks)
-        if 2022 in initial_rosters:
-            self.db.clear_and_insert('roster_2022', initial_rosters[2022])
 
     def apply_contracts_from_csv(self, season, file_path):
         """
-        Updates a roster collection with contract details from a CSV file.
+        Updates a roster collection with detailed contract specifics for drafted
+        veterans from a CSV file.
         """
-        print(f"Applying contracts for {season} season from CSV...")
+        if not os.path.exists(file_path):
+            print(f"Warning: Contracts file not found at '{file_path}'. Skipping contract application for {season}.")
+            return
+
+        print(f"Applying contracts for {season} season from CSV: {file_path}")
         roster_collection = self.db.get_collection(f'roster_{season}')
-        contracts_df = pd.read_csv(file_path)
         
-        for _, row in contracts_df.iterrows():
-            # Your logic to parse the CSV and update MongoDB documents
-            # Example:
-            # roster_collection.update_one(
-            #     {"player_name": row['full_name_ai'], "team_name": row['team']},
-            #     {"$set": {"contract.years": row['contract_years'], ...}}
-            # )
-            pass
+        try:
+            contracts_df = pd.read_csv(file_path)
+            # Filter for rows where a contract is explicitly defined
+            leaguedraft_df = contracts_df[contracts_df['contract_years'].notnull()]
+        except (FileNotFoundError, KeyError) as e:
+            print(f"Error reading or processing contracts CSV: {e}. Please check the file format.")
+            return
+
+        updates_made = 0
+        for _, row in leaguedraft_df.iterrows():
+            player_name = row['full_name_ai']
+            team_name = row['team']
+            contract_years = int(row['contract_years'])
+            y0_cost = int(row['y0'])
+
+            update_payload = {
+                "contract.y0_cost": y0_cost,
+                "contract.contract_years_left": contract_years,
+                "needs_contract_status": False
+            }
+
+            if contract_years == 2:
+                y1_cost = math.ceil(y0_cost * 1.2)
+                update_payload.update({
+                    "contract.y1_cost": y1_cost,
+                    "contract.free_agent_before_season": season + 2
+                })
+            elif contract_years == 3:
+                y1_cost = math.ceil(y0_cost * 1.2)
+                y2_cost = math.ceil(y1_cost * 1.2)
+                update_payload.update({
+                    "contract.y1_cost": y1_cost,
+                    "contract.y2_cost": y2_cost,
+                    "contract.free_agent_before_season": season + 3
+                })
+            else: # Default to 1-year contract
+                update_payload["contract.free_agent_before_season"] = season + 1
+
+            result = roster_collection.update_one(
+                {"player_name": player_name, "team_name": team_name},
+                {"$set": update_payload}
+            )
+            if result.modified_count > 0:
+                updates_made += 1
+        
+        print(f"Applied contract details for {updates_made} players for the {season} season.")
 
     def simulate_season_transactions(self, season, rosters_map, players_map):
         """
         Applies all 'complete' transactions for a given season to the
-        corresponding roster collection.
+        corresponding roster collection and correctly tracks dropped players,
+        excluding trades.
         """
         print(f"Simulating transactions for the {season} season...")
         roster_collection = self.db.get_collection(f"roster_{season}")
         transactions_collection = self.db.get_collection('transactions')
+        drafts_collection = self.db.get_collection('drafts')
 
         transactions = list(transactions_collection.find({"season": season}).sort("transaction_id", 1))
 
+        rookies_dropped = []
+        multiyear_dropped = []
+
         for tx in transactions:
-            # Replicate the logic from your notebook to handle trades, waivers, drops, etc.
-            # This is a simplified example of the logic from your notebook.
             if tx.get('status') != 'complete':
                 continue
+            
+            transaction_type = tx.get('type')
 
             # Handle player drops
             if tx.get('drops'):
                 for player_id, roster_id in tx['drops'].items():
                     player_name = players_map.get(player_id, {}).get("full_name")
-                    owner_info = next((r for r in rosters_map[tx['league_id']] if roster_id in r), None)
+                    # Find the league_id associated with the transaction
+                    tx_league_id = tx.get('league_id')
+                    owner_info = next((r for r in rosters_map.get(tx_league_id, []) if roster_id in r), None)
+
                     if player_name and owner_info:
                         owner_name = owner_info.get(roster_id)
+                        
+                        # --- MODIFIED LOGIC: Check transaction type before logging a drop ---
+                        # A player is only truly "dropped" if it's not a trade.
+                        if transaction_type != 'trade':
+                            player_data = roster_collection.find_one(
+                                {"player_name": player_name, "team_name": owner_name}
+                            )
+
+                            if player_data:
+                                dropped_info = {
+                                    "player_name": player_name, "team_name": owner_name,
+                                    "season": season, "transaction_id": tx.get("transaction_id"),
+                                    "week": tx.get("leg")
+                                }
+                                
+                                if player_data.get("draft_type") == "rookie":
+                                    rookies_dropped.append(dropped_info)
+                                
+                                contract = player_data.get("contract", {})
+                                if contract.get("contract_years_left", 0) > 1:
+                                    multiyear_dropped.append({**dropped_info, **contract})
+
+                        # The database update happens regardless of transaction type
                         roster_collection.update_one(
                             {"player_name": player_name, "team_name": owner_name},
                             {"$unset": {"team_name": "", "contract": ""}}
@@ -289,16 +443,39 @@ class DataProcessor:
             if tx.get('adds'):
                 for player_id, roster_id in tx['adds'].items():
                     player_name = players_map.get(player_id, {}).get("full_name")
-                    owner_info = next((r for r in rosters_map[tx['league_id']] if roster_id in r), None)
+                    tx_league_id = tx.get('league_id')
+                    owner_info = next((r for r in rosters_map.get(tx_league_id, []) if roster_id in r), None)
+
                     if player_name and owner_info:
                         owner_name = owner_info.get(roster_id)
+                        
+                        draft_info = drafts_collection.find_one({"player_id": player_id, "season": season})
+                        player_draft_type = draft_info.get("draft_type") if draft_info else None
+
+                        update_fields = {"team_name": owner_name}
+                        if player_draft_type:
+                            update_fields["draft_type"] = player_draft_type
+
                         roster_collection.update_one(
                             {"player_name": player_name},
-                            {"$set": {"team_name": owner_name}},
+                            {"$set": update_fields},
                             upsert=True
                         )
+        
+        # Save dropped player data to CSV
+        if rookies_dropped:
+            pd.DataFrame(rookies_dropped).to_csv(f'assets/{season}_rookies_dropped_during_season.csv', index=False)
+            print(f"Saved {len(rookies_dropped)} rookies dropped in {season} to assets/{season}_rookies_dropped_during_season.csv")
+        else:
+            print(f"No rookies dropped (non-trade) in {season}.")
 
-# ... (InterSeasonManager class remains the same) ...
+        if multiyear_dropped:
+            pd.DataFrame(multiyear_dropped).to_csv(f'assets/{season}_multiyear_dropped_during_season.csv', index=False)
+            print(f"Saved {len(multiyear_dropped)} multi-year contract players dropped in {season} to assets/{season}_multiyear_dropped_during_season.csv")
+        else:
+            print(f"No multi-year contract players dropped (non-trade) in {season}.")
+
+
 class InterSeasonManager:
     """
     Manages the offseason transition between two seasons.
@@ -426,23 +603,34 @@ def run_full_league_history_pipeline():
     DB_HOST = os.getenv('MDB_HOST')
     
     START_SEASON = 2022
-    END_SEASON = 2025
+    END_SEASON = 2024
     
     # Map league IDs to their corresponding season for accurate transaction fetching
     LEAGUE_IDS_SEASONS = {
         '867459577837416448': 2022,
         '966851427416977408': 2023,
         '1124855836695351296': 2024,
-        '1124855836695351297': 2025
+        '1111111111111111111': 2025
     }
     
     api_client = SleeperAPIClient()
     mongo_manager = MongoManager(DB_USER, DB_PASSWORD, DB_HOST)
     processor = DataProcessor(api_client, mongo_manager)
 
+    # Define all collections that should be reset at the start
+    collections_to_reset = ['players', 'transactions', 'drafts']
+    # Determine the maximum season from LEAGUE_IDS_SEASONS to ensure all relevant collections are reset
+    max_season_in_config = max(LEAGUE_IDS_SEASONS.values())
+    for season_val in range(START_SEASON, max_season_in_config + 2): # +2 to cover upcoming season's ft and roster
+        collections_to_reset.append(f'roster_{season_val}')
+        collections_to_reset.append(f'roster_{season_val}_archival')
+        collections_to_reset.append(f'roster_{season_val}_ft')
+    
+    mongo_manager.reset_collections(collections_to_reset)
+
     # --- 2. INITIAL DATA LOAD ---
     players_map = processor.update_master_player_list()
-    users_map, rosters_map = processor.build_user_and_roster_maps(list(LEAGUE_IDS_SEASONS.keys()))
+    users_map, rosters_map = processor.build_user_and_roster_maps(LEAGUE_IDS_SEASONS) # Pass the dictionary directly
     
     # ['rookie', 'league']
     drafts_by_season = {
@@ -460,7 +648,7 @@ def run_full_league_history_pipeline():
         print(f"\n================ PROCESSING SEASON {season} ================")
         
         if season == START_SEASON:
-            processor.process_and_store_drafts(drafts_by_season[season], users_map, players_map)
+            processor.process_and_store_drafts(drafts_by_season, users_map, players_map) # Pass the dictionary directly
             # Apply initial contracts from your startup CSV
             processor.apply_contracts_from_csv(
                 season, 
