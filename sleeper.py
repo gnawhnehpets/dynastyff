@@ -257,6 +257,7 @@ class DataProcessor:
                         if tx.get("status") == "complete":
                             tx["season"] = int(season)
                             tx["league_id"] = league_id
+                            tx["transaction_id"] = int(tx["transaction_id"])
                             all_transactions.append(tx)
                 except requests.exceptions.HTTPError as e:
                     print(f"Warning: Could not fetch transactions for week {week}, league {league_id}. Status: {e.response.status_code}")
@@ -282,13 +283,20 @@ class DataProcessor:
 
     def build_user_and_roster_maps(self, league_ids):
         """
-        Builds mappings of user IDs to display names and league IDs to rosters.
+        Builds mappings of user IDs to display names, league IDs to rosters,
+        and league IDs to their season.
         """
-        print("Building user and roster maps...")
+        print("Building user, roster, and season maps...")
         users_map = {}
         rosters_map = {}
-        for league_id, season in league_ids.items(): # Modified to get season from LEAGUE_IDS_SEASONS
+        league_season_map = {}
+        for league_id in league_ids:
             try:
+                # Get the season from the league info endpoint, which is the source of truth
+                league_info = self.api.get_league_info(league_id, 0) # season param is for logging, can be 0
+                season = int(league_info["season"])
+                league_season_map[league_id] = season
+
                 users_data = self.api.get_league_users(league_id, season)
                 if not isinstance(users_data, list):
                     print(f"Warning: Unexpected user data format for league {league_id}. Skipping users.")
@@ -312,11 +320,11 @@ class DataProcessor:
                         })
             except requests.exceptions.RequestException as e:
                 print(f"Error fetching data for league {league_id}: {e}. Skipping this league.")
-                rosters_map[league_id] = [] # Ensure map is initialized even if data fetch fails
+                rosters_map[league_id] = []
             except Exception as e:
                 print(f"An unexpected error occurred for league {league_id}: {e}. Skipping this league.")
                 rosters_map[league_id] = []
-        return users_map, rosters_map
+        return users_map, rosters_map, league_season_map
 
     def apply_contracts_from_csv(self, season, file_path):
         """
@@ -651,7 +659,9 @@ TRANSACTION_CLEANING_QUERIES = {
         {"transaction_id": {"$in": [
             992630737629118464, 992658795543166976, 992680388503961600,
             997667560936038400, 997667820534018048, 997671488788467712,
-            997675132925648896, 997676466890448896
+            997672269440774144, 997673326384390144, 997673167717994496,
+            997674584004464640, 997675604331868160, 997675716969844736,
+            997675834104242176, 997675132925648896, 997676466890448896
         ]}},
         # Post-draft adjustments
         {"transaction_id": {"$gt": 1005152235380125696, "$lt": 1006599450380292096}},
@@ -675,33 +685,34 @@ def run_full_league_history_pipeline():
     START_SEASON = 2022
     END_SEASON = 2024
     
-    # Map league IDs to their corresponding season for accurate transaction fetching
-    LEAGUE_IDS_SEASONS = {
-        '867459577837416448': 2022,
-        '966851427416977408': 2023,
-        '1124855836695351296': 2024,
-        '1111111111111111111': 2025
-    }
+    # Hardcoded list of all league IDs across all seasons
+    ALL_LEAGUE_IDS = [
+        '867459577837416448',
+        '966851427416977408',
+        '1124855836695351296',
+        '1111111111111111111' # Example placeholder
+    ]
     
     api_client = SleeperAPIClient()
     mongo_manager = MongoManager(DB_USER, DB_PASSWORD, DB_HOST)
     processor = DataProcessor(api_client, mongo_manager)
 
+    # --- 2. INITIAL DATA LOAD AND MAP BUILDING ---
+    players_map = processor.update_master_player_list()
+    users_map, rosters_map, league_season_map = processor.build_user_and_roster_maps(ALL_LEAGUE_IDS)
+    
     # Define all collections that should be reset at the start
     collections_to_reset = ['players', 'transactions', 'drafts']
-    # Determine the maximum season from LEAGUE_IDS_SEASONS to ensure all relevant collections are reset
-    max_season_in_config = max(LEAGUE_IDS_SEASONS.values())
-    for season_val in range(START_SEASON, max_season_in_config + 2): # +2 to cover upcoming season's ft and roster
-        collections_to_reset.append(f'roster_{season_val}')
-        collections_to_reset.append(f'roster_{season_val}_archival')
-        collections_to_reset.append(f'roster_{season_val}_ft')
+    # Determine the maximum season from the dynamically fetched map
+    if league_season_map:
+        max_season_in_config = max(league_season_map.values())
+        for season_val in range(START_SEASON, max_season_in_config + 2):
+            collections_to_reset.append(f'roster_{season_val}')
+            collections_to_reset.append(f'roster_{season_val}_archival')
+            collections_to_reset.append(f'roster_{season_val}_ft')
     
     mongo_manager.reset_collections(collections_to_reset)
 
-    # --- 2. INITIAL DATA LOAD ---
-    players_map = processor.update_master_player_list()
-    users_map, rosters_map = processor.build_user_and_roster_maps(LEAGUE_IDS_SEASONS) # Pass the dictionary directly
-    
     # ['rookie', 'league']
     drafts_by_season = {
         2022: ['869802031370686464', '869408534662696960'],
@@ -710,7 +721,7 @@ def run_full_league_history_pipeline():
     }
     
     # --- 3. SYNC AND CLEAN TRANSACTIONS (Done once for all seasons) ---
-    processor.sync_all_transactions(LEAGUE_IDS_SEASONS)
+    processor.sync_all_transactions(league_season_map) # Use the dynamic map
     processor.clean_transactions(TRANSACTION_CLEANING_QUERIES)
 
     # --- 4. MAIN SEASON PROCESSING LOOP ---
